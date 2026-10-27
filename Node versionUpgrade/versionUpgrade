@@ -1,0 +1,39 @@
+Upgrade the control plane node from the current minor version to the next patch/minor version
+
+There are two different types of upgrades:
+
+):Patch upgrade
+Example: v1.30.4 → v1.30.5
+The patch number changes. This usually contains bug and security fixes.
+
+):Minor upgrade
+Example: v1.30.4 → v1.31.0
+The minor version changes from 30 to 31. Kubernetes upgrades should proceed one minor version at a time.
+
+):What are we actually upgrading?
+The control plane node runs important Kubernetes components.
+Component	Purpose
+API server	Receives kubectl requests
+Scheduler	Decides which node should run a Pod
+Controller  manager	Maintains the desired cluster state
+etcd	    Stores Kubernetes cluster data
+kubelet	    Manages Pods on the node
+
+When you upgrade the control plane using kubeadm, you upgrade Kubernetes components and packages as required by the target version.
+
+The exact process depends on your installation and target version
+
+):For a kubeadm-based cluster, the key packages are:
+- kubeadm — performs the cluster upgrade.
+- kubelet — manages Pods on the node.
+- kubectl — command-line client; its version is managed separately.
+
+):Step-by-step: Control plane upgrade
+Let's use this example:
+- Current version: v1.30.4
+- Target version: v1.31.0
+- Installation method: kubeadm
+- OS: Ubuntu/Debian
+
+
+
