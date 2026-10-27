@@ -91,5 +91,32 @@ ClusterRoleBinding
     =
 Permissions granted across namespaces
 ): 
+Use this when the workload genuinely needs cluster-wide access.
+
+
+Example B: ClusterRole + RoleBinding
+ClusterRole
+    +
+RoleBinding in dev
+    =
+Permissions granted only in dev
+):
+Use this when you want reusable permission definitions but limited namespace access.
+
+For example, if the pod-reader ClusterRole is bound using a RoleBinding in dev, it grants Pod read access in dev, not automatically in qa or prod.
+
+This is a common and useful Kubernetes RBAC pattern.
+
+Scenario 1: Prometheus monitoring
+A monitoring component needs to discover Pods and Services across namespaces. A suitably restricted ClusterRole and ClusterRoleBinding can provide the required discovery permissions.
+
+Scenario 2: CI/CD deployment pipeline
+A Jenkins or other deployment identity needs to deploy applications only to dev. Prefer a Role and RoleBinding in dev if cluster-wide access is unnecessary.
+
+8. What if you need access to Nodes?
+Nodes are cluster-scoped resources, unlike Pods, which are namespaced.
+resources: ["nodes"]
+
+
 
 
