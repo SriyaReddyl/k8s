@@ -1,0 +1,95 @@
+Kubernetes uses RBAC (Role-Based Access Control) to determine who can perform which actions on which resources.
+
+ClusterRole):	        Defines permissions that can be reused across namespaces or apply to cluster-scoped resources	Cluster-level definition
+ClusterRoleBinding):	Grants a ClusterRole's permissions at cluster scope	Cluster-wide grant
+
+The important distinction is that ClusterRole defines permissions, while ClusterRoleBinding grants those permissions cluster-wide.
+
+A ClusterRole does not automatically grant anyone access. You need a binding to grant its permissions to an identity.
+
+Imagine your Kubernetes cluster has three namespaces
+
+Suppose a monitoring application needs to discover Pods in dev, qa, and prod.
+
+You could create a separate Role and RoleBinding in every namespace. Alternatively, you could define a reusable ClusterRole and bind it using a ClusterRoleBinding.
+
+The second approach is useful when the intended permission really is cluster-wide.
+
+Security warning ): If the application only needs to monitor dev and qa, granting cluster-wide access to every namespace would be unnecessary. Use namespace-scoped RoleBindings when possible.
+
+3. What is a ClusterRole?
+A ClusterRole is a Kubernetes RBAC resource that defines a set of permissions.
+
+It can define permissions for:
+- Namespaced resources, such as Pods, Deployments, Services and ConfigMaps.
+- Cluster-scoped resources, such as Nodes, PersistentVolumes and Namespaces.
+- Non-resource URL endpoints, such as selected API paths.
+A ClusterRole only describes the rules. It does not grant access until those rules are bound to an identity.
+Example: Create a ClusterRole
+Create a file named clusterrole.yaml.
+
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: pod-reader
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+
+The ClusterRole above permits only get, list, and watch on Pods. It does not permit creating, updating, or deleting Pods.
+
+
+4. What is a ClusterRoleBinding?
+A ClusterRoleBinding connects a ClusterRole to one or more subjects:
+- A ServiceAccount
+- A user
+- A group
+It grants the ClusterRole's permissions at the cluster level.
+Example: Bind the ClusterRole to a ServiceAccount
+Suppose you already created this ServiceAccount
+Create a file named clusterrolebinding.yaml.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: monitoring-pod-reader
+subjects:
+  - kind: ServiceAccount
+    name: monitoring-sa
+    namespace: dev
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: pod-reader
+
+Notice that the ClusterRoleBinding itself has no namespace. It is a cluster-scoped resource.
+
+The ServiceAccount, however, must specify its namespace because ServiceAccounts are namespaced resources.
+
+6. ClusterRole vs ClusterRoleBinding vs Role vs RoleBinding
+
+Feature	               Role	         ClusterRole	       RoleBinding	                     ClusterRoleBinding
+Defines permissions?	Yes	            Yes	                  No	                              No
+Grants permissions?	     No	             No	                  Yes	                              Yes
+Has a namespace?	     Yes	         No	                  Yes	                               No
+grant namespaced access? Within its namespace	Can define reusable rules	Within its namespace	Across namespaces
+grant cluster-scoped access? No	Yes	Cannot grant access to cluster-scoped resources	          Yes, through ClusterRole
+
+One subtle but very important point: a RoleBinding can reference a ClusterRole.
+This lets you reuse a ClusterRole's rules while granting access only within one namespace.
+
+Example A: ClusterRole + ClusterRoleBinding
+ClusterRole
+    +
+ClusterRoleBinding
+    =
+Permissions granted across namespaces
+): 
+
+
