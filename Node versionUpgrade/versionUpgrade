@@ -167,6 +167,11 @@ The whole process in one flow
 (:One final point: in a real cluster, back up important cluster state and configuration before maintenance, and check the supported version-skew rules. A control plane upgrade does not automatically upgrade every worker node.
 
 
+3. Can you upgrade a single-node cluster?
+Yes. A single-node kubeadm cluster can be used to practise the control plane upgrade process. However, because there are no other nodes, draining it can interrupt workloads, and evicted Pods may have nowhere else to run.
+
+
+
 
 
 

@@ -1,0 +1,19 @@
+1. What is a Kubernetes downgrade?
+A downgrade means moving from a newer Kubernetes version to an older version.
+
+Imagine you upgraded your control plane from v1.31.2 to v1.32.0, but after the upgrade, your team discovers an application compatibility issue.
+
+Your team decides to roll back to v1.31.2.
+
+- Important, bro: Kubernetes does not support a general in-place downgrade using kubeadm upgrade in the same way it supports upgrades. You need to follow a version-specific recovery or rollback plan. Simply installing an older kubeadm package is not enough.
+
+2. How do we handle a downgrade in real life?
+There are two different situations.
+
+Case A: You upgraded the packages, but haven't completed the cluster upgrade.
+
+You may be able to restore the previous package versions or rerun the supported recovery procedure. The correct steps depend on what has already changed.
+
+Case B: You successfully upgraded Kubernetes and now want the previous version back.
+
+This is more complicated. You generally need a tested recovery plan, potentially including rebuilding the control plane or restoring a compatible etcd snapshot. Restoring an old snapshot also rolls back the Kubernetes objects stored in that snapshot, so changes made afterward can be lost.
