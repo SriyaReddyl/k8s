@@ -10,6 +10,11 @@ The patch number changes. This usually contains bug and security fixes.
 Example: v1.30.4 → v1.31.0
 The minor version changes from 30 to 31. Kubernetes upgrades should proceed one minor version at a time.
 
+): v1.31.2
+- 1 — major version
+- 31 — minor version
+- 2 — patch version
+
 ):What are we actually upgrading?
 The control plane node runs important Kubernetes components.
 Component	Purpose
@@ -30,10 +35,144 @@ The exact process depends on your installation and target version
 
 ):Step-by-step: Control plane upgrade
 Let's use this example:
-- Current version: v1.30.4
-- Target version: v1.31.0
+- Current version: v1.31.2
+- Target version: v1.32.0
 - Installation method: kubeadm
 - OS: Ubuntu/Debian
+
+): Before upgrading, find out which version is running and which node you are working on.
+kubectl get nodes
+kubectl get nodes -o wide
+kubectl version
+
+Who performs the upgrade? The administrator runs commands on the control plane node, typically using kubeadm for a kubeadm-managed cluster.
+
+1. Drain the control plane node
+Run this from a machine with working cluster-admin access:
+kubectl drain controlplane --ignore-daemonsets
+
+(:What draining does
+When you run kubectl drain controlplane --ignore-daemonsets, two things happen:
+
+Cordon: the node is marked unschedulable, so the scheduler stops placing new Pods on it.
+Evict: the Pods already running on it are gracefully removed. Pods managed by a Deployment, ReplicaSet, or StatefulSet get recreated on other nodes by their controllers.
+
+The goal is to empty the node so you can safely do maintenance (upgrade, reboot, patch) without disrupting your applications.
+
+- controlplane is the name of the node you’re about to work on.
+- --ignore-daemonsets is needed because DaemonSet Pods (like Calico, kube-proxy, or log agents) are designed to run on every node. If the drain tried to evict them, the DaemonSet controller would immediately recreate them on the same node. This flag tells drain to skip them and leave them running.
+
+“Check whether the other nodes have enough capacity.”
+Evicted Pods need somewhere to go. If the remaining nodes lack spare CPU or memory, the rescheduled Pods will sit in Pending. This matters a lot in a small cluster, and especially if the node you’re draining is one of only a couple of nodes.
+
+“Some Pods may not be evictable without additional flags; don’t force-delete them blindly.”
+
+A bare Pod you force-delete is gone forever, and an emptyDir Pod loses its data. Check that you can afford that first.
+
+kubectl get nodes                                  # check the other nodes are Ready
+kubectl drain controlplane --ignore-daemonsets     # drain
+kubectl get pods -A -o wide                        # confirm Pods moved elsewhere
+# ... do maintenance ...
+kubectl uncordon controlplane                      # make it schedulable again
+
+2. Upgrade the kubeadm package
+
+First, list available versions:
+sudo apt update
+apt-cache madison kubeadm
+
+3. Unhold and install the target package:
+
+This step comes from upgrading a Kubernetes node with kubeadm. It’s usually the next step after draining the node
+
+(: Think of it like a lock on your phone’s auto-update
+apt-mark hold kubeadm = “Do not update this package, even if a new version is available.” (the lock is ON)
+apt-mark unhold kubeadm = “OK, you are allowed to update this package now.” (the lock is OFF)
+
+Kubernetes packages are kept locked so they never update by accident. To upgrade on purpose, you take the lock off first.
+
+Take the lock off
+   sudo apt-mark unhold kubeadm
+Install the new version you want
+   sudo apt-get install -y kubeadm=1.31.2-1.1
+Put the lock back on
+   sudo apt-mark hold kubeadm
+
+The package version above is an example; use the version actually available in your repository.
+
+Check the installed version:
+kubeadm version
+
+4. Check and apply the cluster upgrade
+sudo kubeadm upgrade plan
+
+This step is the safety check before the real upgrade. It does not change anything.
+
+(: looks at your cluster and tells you:
+Your current Kubernetes version
+Which newer versions you can upgrade to
+Whether the upgrade is possible from where you are now
+Which components will change (API server, controller manager, scheduler, etcd, CoreDNS, kube-proxy)
+The exact command to apply the upgrade
+
+5. Then apply the upgrade
+Once the plan looks good, copy the command it printed:
+sudo kubeadm upgrade apply v1.31.2
+
+This upgrades the control plane components managed by kubeadm, such as the API server, controller manager, and scheduler, along with the cluster configuration and related upgrade steps.
+
+Remember: Installing the new kubeadm package alone does not upgrade the running control plane. The kubeadm upgrade apply command performs the cluster upgrade.
+
+6. Upgrade kubelet and kubectl
+the kubelet is still on the old version. That is why the next step is to upgrade kubelet and kubectl, then restart kubelet.
+
+irst check the available versions:
+apt-cache madison kubelet
+apt-cache madison kubectl
+
+Then, using the actual matching package version from your repository:
+sudo apt-mark unhold kubelet kubectl
+sudo apt-get install -y kubelet=1.32.0-1.1 kubectl=1.32.0-1.1
+sudo apt-mark hold kubelet kubectl
+
+Reload systemd and restart kubelet:
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+
+The kubelet is the node agent that manages Pods on the machine. Restarting it allows the upgraded binary to run.
+
+7. Make the control plane schedulable again
+Return to a machine with cluster-admin access and run:
+kubectl uncordon controlplane
+
+This allows the scheduler to place eligible Pods on the node again.
+
+8. Verify the upgrade
+kubectl get nodes
+kubectl get pods -n kube-system
+kubectl version
+
+Confirm the control plane is Ready and reports the target version. Also verify that the cluster's system Pods are healthy.
+
+
+The whole process in one flow
+1. Check current and target versions
+2. Drain the control plane node
+3. Upgrade the kubeadm package
+4. Run kubeadm upgrade plan/apply
+5. Upgrade kubelet and kubectl
+6. Restart kubelet
+7. Uncordon and verify
+
+(:One final point: in a real cluster, back up important cluster state and configuration before maintenance, and check the supported version-skew rules. A control plane upgrade does not automatically upgrade every worker node.
+
+
+
+
+
+
+
+
 
 
 
