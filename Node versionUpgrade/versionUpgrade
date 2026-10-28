@@ -170,6 +170,30 @@ The whole process in one flow
 3. Can you upgrade a single-node cluster?
 Yes. A single-node kubeadm cluster can be used to practise the control plane upgrade process. However, because there are no other nodes, draining it can interrupt workloads, and evicted Pods may have nowhere else to run.
 
+4. Kubernetes version skew policy ?
+
+
+
+
+
+
+
+
+- In highly-available (HA) clusters, the newest and oldest kube-apiserver instances must be within one minor version.
+
+- kubelet must not be newer than kube-apiserver.
+- kubelet may be up to three minor versions older than  kube-apiserver
+
+- kube-proxy must not be newer than kube-apiserver.
+- kube-proxy may be up to three minor versions older than kube-apiserver
+
+- kube-controller-manager, kube-scheduler, and cloud-controller-manager must not be newer than the kube-apiserver instances they communicate with. They are expected to match the kube-apiserver minor version, but may be up to one minor version older (to allow live upgrades).
+
+- kubectl is supported within one minor version (older or newer) of kube-apiserver.
+
+
+
+
 
 
 
