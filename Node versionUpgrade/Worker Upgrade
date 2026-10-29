@@ -1,0 +1,34 @@
+Part B: Each healthy worker
+
+1. Do these one at a time: argocd-grafana, harbour-vm, selfhosted-runner-1, selfhosted-runner-2.
+
+2. On the control plane, drain it:
+kubectl drain <worker-name> --ignore-daemonsets --delete-emptydir-data
+
+3. On the worker itself:
+sudo sed -i 's/v1\.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list
+sudo apt update
+
+sudo apt-mark unhold kubeadm && \
+sudo apt-get install -y kubeadm='1.32.x-*' && \
+sudo apt-mark hold kubeadm
+
+sudo kubeadm upgrade node
+
+sudo apt-mark unhold kubelet kubectl && \
+sudo apt-get install -y kubelet='1.32.x-*' kubectl='1.32.x-*' && \
+sudo apt-mark hold kubelet kubectl
+
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+
+4. Back on the control plane, uncordon it:
+
+kubectl uncordon <worker-name>
+kubectl get nodes
+
+Wait until the worker shows Ready on v1.32.x before starting the next one.
+
+5. Final check
+kubectl get nodes
+kubectl get pods -A

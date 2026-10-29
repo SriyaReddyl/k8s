@@ -1,0 +1,48 @@
+Part A: Control plane (quixydevops)
+
+0. Check your OS (the commands below are for Ubuntu/Debian):
+cat /etc/os-release
+
+1. Backup etcd:
+sudo ETCDCTL_API=3 etcdctl snapshot save /root/etcd-backup-$(date +%F).db \
+  --endpoints=https://127.0.0.1:2379 \
+  --cacert=/etc/kubernetes/pki/etcd/ca.crt \
+  --cert=/etc/kubernetes/pki/etcd/server.crt \
+  --key=/etc/kubernetes/pki/etcd/server.key
+
+2. Switch the repo to 1.32:
+sudo sed -i 's/v1\.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list
+cat /etc/apt/sources.list.d/kubernetes.list   # confirm it says v1.32
+sudo apt update
+sudo apt-cache madison kubeadm
+
+3. Upgrade kubeadm (replace x with the latest patch you saw):
+sudo apt-mark unhold kubeadm && \
+sudo apt-get update && sudo apt-get install -y kubeadm='1.32.x-*' && \
+sudo apt-mark hold kubeadm
+kubeadm version
+
+4. Check, then apply:
+sudo kubeadm upgrade plan
+sudo kubeadm upgrade apply v1.32.x
+
+Wait for SUCCESS! Your cluster was upgraded to "v1.32.x". kubectl may be unresponsive for a minute while the API server restarts. That’s normal with one control plane.
+
+5. CNI: check which network plugin you use (kubectl get pods -n kube-system) and follow its upgrade guide if it requires one.
+
+6. Drain the node:
+kubectl drain quixydevops --ignore-daemonsets
+
+7. Upgrade kubelet and kubectl:
+sudo apt-mark unhold kubelet kubectl && \
+sudo apt-get update && sudo apt-get install -y kubelet='1.32.x-*' kubectl='1.32.x-*' && \
+sudo apt-mark hold kubelet kubectl
+
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+systemctl status kubelet
+
+8. Uncordon:
+kubectl uncordon quixydevops
+kubectl get nodes
+
