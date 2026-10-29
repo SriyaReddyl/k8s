@@ -45,6 +45,14 @@ kubectl get nodes
 kubectl get nodes -o wide
 kubectl version
 
+):Checking Available Package Versions (Ubuntu / Debian / RHEL)
+
+If you need to see available package versions from your repository (e.g., for kubeadm, kubelet, or kubectl):
+- sudo apt-get update
+- sudo apt-cache madison kubeadm
+
+
+
 Who performs the upgrade? The administrator runs commands on the control plane node, typically using kubeadm for a kubeadm-managed cluster.
 
 1. Drain the control plane node
