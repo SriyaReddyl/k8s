@@ -32,3 +32,57 @@ Wait until the worker shows Ready on v1.32.x before starting the next one.
 5. Final check
 kubectl get nodes
 kubectl get pods -A
+
+Before you drain any worker
+
+Your earlier logs showed a node label argocd=true on argocd-grafana, and a CLOUD=true label on selfhosted-runner-2. Pods may be pinned to those nodes with a nodeSelector. If you drain a node and its pods can’t run anywhere else, they stay Pending until you uncordon it, which means downtime for that app.
+
+
+Upgrading one worker (example: argocd-grafana)
+
+On quixydevops: drain
+kubectl drain argocd-grafana --ignore-daemonsets --delete-emptydir-data
+
+Wait until it finishes. Pods are rescheduled elsewhere. Then check nothing important is stuck Pending:
+kubectl get pods -A | grep -v -E "Running|Completed"
+
+
+):On the worker (argocd-grafana): upgrade
+
+cat /etc/apt/sources.list.d/kubernetes.list     # confirm it says v1.31
+sudo sed -i 's/v1\.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list
+sudo apt update
+
+sudo apt-mark unhold kubeadm && \
+sudo apt-get install -y kubeadm='1.32.13-*' && \
+sudo apt-mark hold kubeadm
+
+sudo kubeadm upgrade node
+
+sudo apt-mark unhold kubelet kubectl && \
+sudo apt-get install -y kubelet='1.32.13-*' kubectl='1.32.13-*' && \
+sudo apt-mark hold kubelet kubectl
+
+sudo systemctl daemon-reload
+sudo systemctl restart kubelet
+systemctl status kubelet --no-pager | head -5
+
+(:On quixydevops: bring it back
+
+kubectl uncordon argocd-grafana
+kubectl get nodes
+
+(:Wait until it shows Ready and v1.32.13, then move to the next worker.
+
+One heads-up: your container runtime is CRI-O
+
+Your pods show cri-o://, not containerd. CRI-O is designed to run at the same minor version as Kubernetes. A one-version gap usually works, but check what you have on each worker:
+
+crio --version
+
+If the CRI-O package is installed from the same apt setup as Kubernetes, don’t upgrade it during this procedure unless you intend to. Just know which version you’re on. If anything breaks after a kubelet upgrade, the container runtime is one place to look.
+
+1. A bare pod will stop the drain: dev/nginx
+
+Its name has no random suffix, so it’s almost certainly a standalone pod with no Deployment behind it. kubectl drain refuses to evict those, and if you force it, the pod is deleted and never recreated.
+

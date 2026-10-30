@@ -46,3 +46,75 @@ systemctl status kubelet
 kubectl uncordon quixydevops
 kubectl get nodes
 
+(:The problem
+
+After upgrading the control plane to 1.32.13, the kube-proxy pods on every node were still running the old version (1.31.9).
+
+(:Why it happened
+
+kubeadm did its part. It updated the kube-proxy definition (the DaemonSet) to say “use version 1.32.13”. But Kubernetes then has to replace the old pods with new ones, and it does that carefully, one pod at a time.
+
+Here’s what blocked it:
+Your cluster has 10 nodes, and 5 are NotReady (down).
+Kubernetes already counts those 5 kube-proxy pods as “unavailable”.
+The rollout rule says only 1 pod may be unavailable (maxUnavailable: 1).
+5 is already more than 1, so Kubernetes refuses to replace any pod.
+
+Your output showed this exactly: UP-TO-DATE 0, READY 5, and rollout status timing out.
+
+An analogy: a shop says “only 1 cashier may be on break at a time”. But 5 are already absent, so nobody else is ever allowed to take a break, and the schedule is stuck.
+
+(:How we solve it
+
+Raise the limit so Kubernetes can continue updating the healthy nodes:
+kubectl -n kube-system patch ds kube-proxy -p '{"spec":{"updateStrategy":{"type":"RollingUpdate","rollingUpdate":{"maxUnavailable":6}}}}'
+
+Using the analogy: 5 are already absent, so we allow 6 absent. That lets 1 more healthy cashier take a break and be replaced, one at a time.
+
+Important: it isn’t fixed yet
+
+So far we’ve only found the cause and the fix. You haven’t run the patch, so kube-proxy is still on 1.31.9. After you run it, verify:
+
+kubectl -n kube-system get pods -o custom-columns=NAME:.metadata.name,NODE:.spec.nodeName,IMAGE:.spec.containers[*].image | grep kube-proxy
+
+Success looks like: the 5 healthy nodes show v1.32.13. The 5 NotReady nodes will still show the old version, which is normal because they’re down.
+
+(:The root cause
+The real underlying problem is the 5 NotReady nodes. The patch is a workaround. As long as those nodes are down, they’ll cause the same trouble again with Calico and with the next upgrade. The permanent fix is to repair them or remove them from the cluster.
+
+SO NOW FOR THIS MASTER NODE UPGRADATION WHAT COMPONENTS ARE UPGRADED :
+
+Component	                   Status	                 Evidence
+kube-apiserver	           ✅ v1.32.13	           Image in kubectl get pods
+kube-controller-manager	   ✅ v1.32.13	           Same
+kube-scheduler	           ✅ v1.32.13	           Same
+etcd	                     ✅ 3.5.24-0	           Same (etcd has its own versioning, so it isn’t 1.32)
+kubelet on quixydevops	   ✅ v1.32.13	           kubectl get nodes
+kube-proxy	               ✅ v1.32.13	           Done after updating the daemonset maxunavailable
+CoreDNS	                   ✅ v1.11.3	           This is the correct version for 1.32, so no change was needed
+Calico	                   ⚠️ v3.25.0	            Never upgraded by kubeadm, and it’s very old
+kubelet on workers	       ❌ Not yet	           All still v1.31.x
+
+
+🔜 Not part of the master node, but still needed for the 1.32 hop
+Upgrade the 4 healthy workers to 1.32: argocd-grafana, harbour-vm, selfhosted-runner-1, selfhosted-runner-2
+kube-proxy on those 4 workers (it will update by itself once the DaemonSet rolls out)
+Calico is not updated by kubeadm update, need to do it seperately
+
+
+*** CALICO VERSION UPGRADE ***
+1. Install method: confirmed
+No calico-system or tigera-operator namespace appeared, so this is a plain manifest install, not the operator.
+DATASTORE_TYPE: kubernetes, so there’s no separate etcd for Calico.
+Your settings are all defaults: IPIP Always, VXLAN Never, BGP via BIRD, IP autodetect, no Typha. The pod CIDR isn’t set in the DaemonSet, and your pod IPs (192.168.x.x) match Calico’s default range.
+
+That means the standard calico.yaml manifest upgrade fits you, and you have no custom settings to carry over.
+
+Felix (policy and dataplane) is healthy. Your logs show endpoints coming up normally.
+BIRD (the BGP daemon that shares routes between nodes) on selfhosted-runner-1 isn’t responding, so that node may not learn route changes properly.
+
+The old pod had been running since January 2026, and its BIRD process had hung, so the readiness probe kept failing for months. A new pod means a new BIRD process, and the sockets in /var/run/calico/ were recreated at 11:48. The Felix half was always fine. A restart is the standard fix for a stuck process.
+
+
+
+
