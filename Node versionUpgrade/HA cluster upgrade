@@ -1,0 +1,29 @@
+HA control plane upgrade
+
+The flow (one node at a time, never in parallel):
+
+):CP-1 (first)	upgrade kubeadm package → kubeadm upgrade plan → kubeadm upgrade apply v1.30.x → drain → upgrade kubelet and kubectl → restart kubelet → uncordon
+
+):CP-2, CP-3...	upgrade kubeadm package → kubeadm upgrade node (no plan, no apply) → drain → upgrade kubelet and kubectl → restart kubelet → uncordon
+
+):Workers	upgrade kubeadm package → kubeadm upgrade node → drain (run from a control plane) → upgrade kubelet and kubectl → restart kubelet → uncordon
+
+):Why apply on only the first node? apply does the cluster-wide work once: it updates the cluster config stored in the kubeadm-config ConfigMap and upgrades the shared addons (CoreDNS, kube-proxy). upgrade node only updates that node’s local static pod manifests and kubelet config.
+
+):Why one at a time? With stacked etcd, each control plane node runs its own etcd member, and etcd needs a quorum (majority) to work. Upgrading nodes one by one keeps a majority alive.
+
+Tie this to your 2-master setup (Q17 in my list):
+
+With 2 etcd members, quorum is 2, so you can tolerate zero failures.
+When one master is being upgraded, its etcd restarts, you briefly lose quorum, and the API can become unavailable for writes.
+A 2-node control plane is therefore no more fault-tolerant than 1 node for etcd. The recommendation is 3 control plane nodes, which tolerate 1 failure.
+
+):The API stays reachable through the load balancer. During the upgrade, apiservers may be one minor version apart, which skew policy allows.”
+
+):Extra points:
+
+If etcd is external, kubeadm doesn’t upgrade it, so you upgrade it separately.
+The load balancer in front of the apiservers keeps clients working while each node restarts.
+
+
+

@@ -8,6 +8,7 @@ kubectl drain <worker-name> --ignore-daemonsets --delete-emptydir-data
 3. On the worker itself:
 sudo sed -i 's/v1\.31/v1.32/g' /etc/apt/sources.list.d/kubernetes.list
 sudo apt update
+sudo apt-cache madison kubeadm
 
 sudo apt-mark unhold kubeadm && \
 sudo apt-get install -y kubeadm='1.32.x-*' && \
@@ -37,8 +38,42 @@ Before you drain any worker
 
 Your earlier logs showed a node label argocd=true on argocd-grafana, and a CLOUD=true label on selfhosted-runner-2. Pods may be pinned to those nodes with a nodeSelector. If you drain a node and its pods can’t run anywhere else, they stay Pending until you uncordon it, which means downtime for that app.
 
+Solution 1: Add the same label to another worker node
 
-Upgrading one worker (example: argocd-grafana)
+Once you drain a worker node, its pods are evicted and recreated on other eligible worker nodes. After upgrading and uncordoning the original worker, Kubernetes does NOT automatically move those pods back.
+
+): Why don't pods automatically move back?
+Because Kubernetes scheduler works primarily when a pod needs to be scheduled.
+
+For example:
+- A pod is created.
+- A pod is evicted.
+- A pod is deleted and recreated.
+The scheduler finds a suitable node for that pod.
+
+But after Worker 1 becomes available again, Kubernetes doesn't compare all existing pod placements and automatically redistribute them.
+
+This is normal Kubernetes behaviour.
+
+):Manually restart workloads
+
+For a Deployment:
+kubectl rollout restart deployment <deployment-name> -n <namespace>
+The recreated pods will be scheduled again, potentially on Worker 1.
+However, Kubernetes does not guarantee they will return to Worker 1.
+
+): Use Descheduler
+Useful for automatic rebalancing
+Kubernetes Descheduler is a separate component that periodically checks pod placement and evicts pods when configured policies indicate that they should be moved.
+
+For example, it can help with:
+- Node resource imbalance.
+- Pod distribution across nodes.
+- Removing pods from nodes that violate scheduling policies.
+After eviction, the scheduler places the replacement pods on eligible nodes.
+
+
+):Upgrading one worker (example: argocd-grafana)
 
 On quixydevops: drain
 kubectl drain argocd-grafana --ignore-daemonsets --delete-emptydir-data
@@ -86,3 +121,42 @@ If the CRI-O package is installed from the same apt setup as Kubernetes, don’t
 
 Its name has no random suffix, so it’s almost certainly a standalone pod with no Deployment behind it. kubectl drain refuses to evict those, and if you force it, the pod is deleted and never recreated.
 
+*FLOW*
+Drain from the master: kubectl drain <node> --ignore-daemonsets --delete-emptydir-data
+On the node, change the version in /etc/apt/sources.list.d/kubernetes.list
+apt update
+apt-cache madison kubeadm to find the latest patch of the target minor
+apt-mark unhold kubeadm
+Install kubeadm at the target version
+apt-mark hold kubeadm
+kubeadm upgrade node
+apt-mark unhold kubelet kubectl
+Install both at the target version
+apt-mark hold kubelet kubectl
+systemctl daemon-reload
+systemctl restart kubelet
+Check the kubelet: systemctl status kubelet and the logs
+From the master: kubectl get nodes shows Ready and the new version
+kubectl uncordon <node>
+Check pods overall against the baseline
+
+*** ISSUES I FACED ***
+kubernetes.list on argocd-grafana still points at the old, legacy Kubernetes repo:
+deb https://apt.kubernetes.io/ kubernetes-xenial main 
+so in this we cant upgrade the version
+wrote the new pkgs.k8s.io/.../v1.32/deb/ repo and imported its signing key.
+
+
+Confusion: pods still running after the drain. Those were DaemonSet pods (calico-node, kube-proxy, log agents), which --ignore-daemonsets leaves in place.
+
+Confusion: pods don’t return after uncordon. They stay where they were rescheduled
+
+Calico was v3.25.0, far behind the cluster. kubeadm never upgrades the CNI, so this was a separate upgrade (to v3.29.7).
+
+hostPath and local volumes are pinned to nodes (Harbor, MinIO, RabbitMQ), so draining those nodes means downtime, not migration.
+
+SigNoz volumes had no node affinity, so its pods could reschedule where the data isn’t. You decided that data isn’t important.
+
+After draining a node the pods needed to be scheduled on another node right? But those nodes may have tains and thise pods in this node may not have tolerations ---- They go to Pending. 
+
+A pod that can’t be placed stays unscheduled with no node assigned until something changes.

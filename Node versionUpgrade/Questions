@@ -1,0 +1,60 @@
+(:Installing the kubeadm package (apt-get install kubeadm=1.32.13-*)
+Nothing in the cluster changes. Only the kubeadm binary on that machine is replaced
+
+(:Running kubeadm upgrade apply (first control plane node)
+
+This is where components change.
+
+Component	                 Upgraded?	                       How
+kube-apiserver	              ✅	               static pod manifest rewritten
+kube-controller-manager	      ✅	               static pod manifest rewritten
+kube-scheduler	              ✅	               static pod manifest rewritten
+etcd                          ✅	               static pod manifest rewritten 
+CoreDNS	                      ✅	               addon applied 
+kube-proxy	                  ✅	               DaemonSet definition updated
+Cluster certificates	      ✅	renewed (use --certificate-renewal=false to skip)
+Controlplane kubeconfig files ✅	               upgraded
+kubelet	                      ❌	               you do it manually
+kubectl	                      ❌	               you do it manually
+CNI (Calico)	              ❌	               separate upgrade
+
+(:Running kubeadm upgrade node (other control plane nodes and workers)
+
+On workers: only the node’s kubelet configuration is updated. Your output showed this:
+
+[upgrade/kubelet-config] The kubelet configuration for this node was successfully upgraded!
+Everything else printed Skipping ... Not a control plane node.
+
+(:So the drain only has to land before the kubelet step.
+
+{:✅ Kubelet can be up to 3 minor versions older than kube-apiserver. This has been 3 since v1.28 (it was 2 before). It must never be newer than the apiserver
+
+{:Also mention: in an HA control plane, the kube-apiserver instances themselves can differ by at most 1 minor during an upgrade.
+
+(: Correct flow on the first control plane node:
+Upgrade the kubeadm package.
+kubeadm upgrade plan, then kubeadm upgrade apply v1.xx.x. This upgrades the apiserver, controller-manager, scheduler, etcd, kube-proxy, and CoreDNS.
+kubectl drain <node> --ignore-daemonsets.
+Upgrade kubelet and kubectl, then systemctl daemon-reload && systemctl restart kubelet.
+kubectl uncordon <node>.
+
+(:kubelet	Up to 3 minor older, never newer
+kube-proxy	Up to 3 minor older, never newer than the apiserver
+kube-controller-manager, kube-scheduler	Same version, or 1 minor older, never newer
+kubectl	±1 minor
+
+(:✅ apply is only for the first control plane node.
+❌ upgrade node is not workers only. It’s for all other control plane nodes and all workers. On a worker it updates the local kubelet configuration. On additional control plane nodes it also updates the local static pod manifests.
+
+(:⚠️ --ignore-daemonsets: DaemonSet pods are not evicted. They stay on the node, because evicting them is pointless (the controller would recreate them instantly). Drain refuses to proceed if DaemonSet pods exist unless you pass this flag.
+
+(:✅ Add that cordon marks the node Unschedulable but existing pods keep running, and that drain implicitly cordons first.
+
+(:❌ kubeadm upgrade apply does not upgrade the kubeadm package. You install that manually first. It upgrades the control plane static pods (apiserver, controller-manager, scheduler, etcd) plus CoreDNS and kube-proxy.
+
+(:The actual reason: the kubelet is a systemd service on the host, not a pod, so kubeadm doesn’t manage its binary. kubectl is just a client tool. Both come from OS packages, so you install them with apt-get install -y kubelet=1.30.x-* kubectl=1.30.x-*.
+
+
+
+
+
