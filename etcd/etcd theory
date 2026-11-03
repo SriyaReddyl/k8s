@@ -1,0 +1,142 @@
+):What etcd is
+
+etcd is a distributed, consistent key-value database used by Kubernetes to store its cluster state and configuration.
+
+Kubernetes keeps all cluster state in it: every Pod, Secret, ConfigMap, and RBAC rule. If etcd is lost and you have no backup, the cluster state is gone.
+
+etcd is the data store used to create and maintain the version of the truth.
+
+What does key-value mean?
+A key-value database stores information in pairs.
+- Key = What information you want to identify.
+- Value = The information stored against that key.
+
+):What happens if etcd is lost?
+Imagine your etcd database is completely deleted.
+
+Your worker nodes might still have running containers.
+
+However, Kubernetes loses its persistent record of cluster objects.
+
+For example:
+- Deployment definitions may be lost.
+- Service definitions may be lost.
+- ConfigMaps may be lost.
+- Kubernetes object metadata may be lost.
+- Cluster configuration may become unavailable.
+
+):Where does etcd exist in Kubernetes architecture?
+In control plane
+The API server is the component that reads and writes Kubernetes objects to etcd.
+
+**etcd stores the desired state, while Kubernetes controllers work to make the actual state match the desired state.**
+
+):How is etcd deployed in Kubernetes?
+There are two common ways.
+1. Stacked etcd
+This is the default setup when you initialize a cluster using kubeadm.
+In this architecture:
+- etcd runs on the control-plane node.
+- The API server runs on the same control-plane node.
+- Both are separate components.
+- etcd is deployed as a static Pod.
+
+EXAMPLE :: ::
+
+Server	Components
+Master 1	API server, etcd, scheduler, controller manager
+Master 2	API server, etcd, scheduler, controller manager
+Master 3	API server, etcd, scheduler, controller manager
+Worker 1	Kubelet, container runtime
+Worker 2	Kubelet, container runtime
+
+Each control-plane node runs an etcd member.
+
+"Stacked etcd” is a high-availability (HA) topology in kubeadm where etcd runs on the same nodes as the control plane components, as part of the same cluster setup. The alternative is external etcd, where etcd runs on separate dedicated nodes.
+
+))):So with three control plane nodes you get three API servers and a three-member etcd cluster. Each API server talks to the local etcd member (127.0.0.1:2379), and the etcd members replicate to each other over the peer port (2380).
+
+Control plane node 1       Control plane node 2       Control plane node 3
+[apiserver][sched][cm]     [apiserver][sched][cm]     [apiserver][sched][cm]
+[etcd]  <-------------->   [etcd]  <-------------->   [etcd]
+
+A load balancer sits in front of the API servers so workers and clients have one stable endpoint.
+
+)):Why people choose it
+Simpler to set up and manage. kubeadm init and kubeadm join --control-plane handle etcd automatically.
+Fewer machines. You need 3 nodes instead of 6 (3 control plane + 3 etcd).
+Etcd runs as a static pod, like the other control plane components.
+
+)):The downside: coupled failure
+
+Because etcd and the control plane share a node, losing one node loses both an API server and an etcd member at once. That’s less resilient than external etcd, where the two layers fail independently.
+
+A misbehaving control plane component can also compete for CPU, memory, or disk I/O with etcd, which is sensitive to disk latency.
+
+
+2. External etcd
+
+In this architecture, etcd runs on separate dedicated machines.
+Example:
+Server	Components
+Master 1	API server, scheduler, controller manager
+Master 2	API server, scheduler, controller manager
+Master 3	API server, scheduler, controller manager
+Etcd 1	etcd
+Etcd 2	etcd
+Etcd 3	etcd
+
+The API servers communicate with the external etcd cluster.
+
+)):External etcd means etcd runs on its own dedicated nodes, separate from the control plane nodes. The API servers connect to it over mutual TLS using a list of endpoints in the kubeadm ClusterConfiguration (etcd.external.endpoints, plus caFile, certFile, keyFile).
+
+):Why choose it:
+
+Control plane and etcd fail independently
+etcd gets dedicated CPU, memory, and fast disks
+You can scale, tune, back up, and upgrade etcd separately
+
+):Trade-offs:
+
+At least 6 machines for HA (3 control plane + 3 etcd)
+You provision and manage etcd yourself, including certificates, backups, and monitoring
+
+Stacked vs external: stacked is simpler and cheaper (3 nodes) but has coupled failures; external costs more and takes more effort but isolates failures and suits large or high-churn clusters. In both, use an odd number of etcd members (3 or 5).
+
+):why odd numbered?
+
+Because of quorum. etcd uses the Raft consensus algorithm, which needs a majority of members to agree before it commits a write or elects a leader.
+
+Quorum = ⌊n/2⌋ + 1
+
+
+ETCD ::
+- Its manifest is located at:
+/etc/kubernetes/manifests/etcd.yaml
+
+- Its data directory is normally:
+/var/lib/etcd
+
+):Why is it called a static Pod?
+
+Because kubelet directly manages this Pod using the manifest file on the node, rather than relying on the Kubernetes API to create it.
+
+This is particularly important during cluster startup: the API server depends on etcd, so etcd must be able to start independently.
+
+-----------------------------------------------------------------
+-----------------------------------------------------------------
+
+)):etcd is not simply one database file. Internally, it has multiple components.
+
+The most important components to understand are:
+1. Raft consensus algorithm
+2. Leader and followers
+3. Quorum
+4. WAL (Write-Ahead Log)
+5. Snapshot
+6. Backend database (bbolt)
+7. Revision and watch mechanisms
+
+):Raft consensus algorithm
+
+

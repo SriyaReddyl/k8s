@@ -1,0 +1,160 @@
+A pod is the smallest deployable unit in Kubernetes: one or more containers sharing network and storage. What differs between “kinds” of pods is mostly who creates and manages them.
+
+):Static pods
+
+A static pod is managed directly by the kubelet on a specific node, without the API server or any controller involved.
+
+You put a pod manifest YAML in a directory on the node (usually /etc/kubernetes/manifests, set by staticPodPath in the kubelet config), or point the kubelet at a URL.
+
+The kubelet watches that directory, starts the pod, and restarts it if it crashes.
+
+The kubelet also creates a read-only mirror pod in the API server so you can see it with kubectl get pods. You can’t delete or edit it through kubectl; you have to change or remove the file on the node.
+
+It’s tied to that one node. The scheduler never touches it, and there’s no ReplicaSet or Deployment behind it.
+
+Pod names get the node name appended, e.g. kube-apiserver-master01.
+
+):Static Pod YAML in the default directory
+Usually:
+/etc/kubernetes/manifests/
+Suppose you create:
+/etc/kubernetes/manifests/nginx.yaml
+
+- Kubelet continuously monitors this directory.
+- If the Pod gets deleted using kubectl delete pod, kubelet recreates it.
+- If the container crashes, kubelet restarts it.
+- If you delete the YAML manifest, kubelet stops managing that Pod and removes it.
+You don't need to manually apply the YAML. Kubelet automatically detects the manifest.
+
+Static Pod YAML in a different directory
+Suppose you configure kubelet with:
+staticPodPath: /opt/static-pods
+
+
+):Now you place nginx.yaml inside /opt/static-pods/.
+
+The behavior is exactly the same:
+- Kubelet monitors /opt/static-pods.
+- If the Pod is deleted, kubelet recreates it.
+- If the container crashes, kubelet restarts it.
+- If you delete the YAML file, kubelet removes the Pod.
+
+- Important: Just placing YAML in another directory doesn't make it a static Pod. That directory must be configured as the kubelet's staticPodPath.
+
+):Static Pods are managed directly by the kubelet, not by the API server.
+
+):The API server only gets a mirror Pod representation of the static Pod.
+
+):One important distinction: You cannot manage a static Pod like a normal Deployment. You must modify or remove its manifest on the node itself.
+
+)):A handy way to tell if a pod is static: look at its ownerReferences with kubectl get pod <name> -o yaml. Static (mirror) pods show the Node as owner, while controller-managed pods show a ReplicaSet, StatefulSet, DaemonSet, etc.
+
+-----------------------------------------------------------------
+
+):Regular Pods (Bare Pods)
+
+A Bare Pod is a Pod that you create directly without using any controller such as Deployment or ReplicaSet.
+Real-time example
+Suppose your team wants to run one Nginx Pod for testing.
+
+You create a YAML file:
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-pod
+spec:
+  containers:
+    - name: nginx
+      image: nginx
+      ports:
+        - containerPort: 80
+
+Create the Pod:
+kubectl apply -f nginx.yaml
+
+What happens internally?
+1. You submit the YAML using kubectl.
+2. API server validates the request.
+3. Pod details are stored in etcd.
+4. Scheduler selects a suitable worker node.
+5. Kubelet on that node creates the container through the container runtime.
+What happens if the Pod gets deleted?
+kubectl delete pod nginx-pod
+
+The Pod will be deleted permanently.
+
+Kubernetes will NOT automatically recreate it because no controller is managing it.
+
+If you need it again, you must manually apply the YAML.
+
+-----------------------------------------------------------------
+
+):Controller-managed Pods
+
+Here, instead of creating individual Pods directly, you create a controller that manages Pods for you.
+
+For example:
+- Deployment
+- ReplicaSet
+- StatefulSet
+- DaemonSet
+- Job
+- CronJob
+
+Real-time example
+Suppose your application needs three Nginx replicas.
+
+Instead of creating three individual Pods, you create a Deployment.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-deployment
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: nginx
+  template:
+    metadata:
+      labels:
+        app: nginx
+    spec:
+      containers:
+        - name: nginx
+          image: nginx
+          ports:
+            - containerPort: 80
+
+Create it:
+kubectl apply -f deployment.yaml
+
+
+What happens internally?
+Deployment
+Desired replicas = 3
+ReplicaSet
+Ensures 3 Pods exist
+Pod 1
+Pod 2
+Pod 3
+
+What happens if a Pod gets deleted?
+
+Suppose you delete Pod 1:
+kubectl delete pod nginx-deployment-xxxxx
+
+The ReplicaSet notices that only two Pods are running, but the desired number is three.
+
+It automatically creates another Pod.
+
+You don't need to manually apply the Pod YAML again.
+
+))): What happens if a worker node crashes?
+
+):Static Pod: Kubelet on that node is unavailable. The Pod stops running there. It is not automatically rescheduled to another node.
+
+):Bare Pod: The Pod is not automatically recreated on another node.
+
+):Deployment-managed Pod: The Deployment's ReplicaSet can create a replacement Pod on another healthy node, provided the cluster has sufficient resources and scheduling is possible
+
+
