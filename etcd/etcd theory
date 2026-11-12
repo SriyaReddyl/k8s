@@ -321,6 +321,179 @@ The leader itself counts as one member. A write does not require all followers t
 )):WAL – Write-Ahead Log
 WAL stands for Write-Ahead Log.
 
+etcd needs to store this information permanently.
+
+But what happens if the etcd server crashes while writing data?
+To prevent losing changes, etcd uses WAL
+
+Whenever etcd receives a change, it records the change in its WAL before considering the operation committed.
+
+1. A write request reaches the etcd leader.
+2. The write is recorded in the WAL.
+3. WAL entries are replicated to followers.
+4. Once a quorum has replicated the entry, it is committed.
+5. The committed change is applied to the database state.
+
+The WAL is a file on disk (<data-dir>/member/wal/*.wal). But when etcd writes to that file, the data doesn’t land on the physical disk immediately.
+
+## The WAL file always exists on disk, but without fsync, its latest entries might exist only in RAM. If the machine crashed at that moment, those entries would vanish, even though the follower had already ACKed them.
+
+So etcd does: write to WAL file, then fsync, then ACK. Only after fsync is the entry truly durable.
+
+WAL is a file on disk.
+write() puts data in the file, but only in OS memory at first.
+fsync() pushes it to the physical disk.
+etcd fsyncs before ACKing, so the entry survives crashes.
+
+
+fsync is a system call that tells the operating system: “Take the data I wrote to this file and physically save it to the disk right now. Don’t return until it’s done.”
+
+## Raft is the algorithm that helps these servers agree on the same data. 
+
+## Followers don’t replicate from the WAL file. They receive entries from the leader over the network (Raft AppendEntries messages), and each node writes those entries into its own WAL. The WAL is a local durability mechanism, not the replication channel.
+
+## The leader sends entries from its in-memory Raft log (with the WAL as backing storage), not by shipping the WAL file.
+
+## A follower must fsync to its WAL before it ACKs. If it ACKed without persisting and then crashed, the leader might count it toward the majority for a commit that the follower has now forgotten, which would break Raft’s safety guarantee.
+
+
+)):bbolt in etcd
+
+Two things etcd stores, and why
+
+                       WAL (log)	                                    bbolt (database)
+What it holds	       A history of every change, in order	            The current data
+Analogy	               Bank statement (every transaction)	            Account balance (right now)
+Used for               Agreement between nodes, crash recovery	        Answering GET requests
+
+etcd needs to store data on disk so it survives restarts, and it needs to read that data quickly. Writing your own file format for this would be hard and risky. So etcd uses a small ready-made database library inside itself. That library is bbolt.
+
+A key-value database, like a giant dictionary: give it a key, get a value.
+It lives in one file on disk.
+It is embedded: it’s not a separate server you install. It’s code that runs inside the etcd program.
+
+Example: if you set x=1, then x=2, then x=3:
+
+The log remembers all three operations.
+bbolt holds the result, where x is 3 (plus older versions, covered below).
+
+You: PUT name=Ravi
+      |
+      v
+1. Raft agrees on it (written to WAL on a majority of nodes)
+      |
+      v
+2. Entry is "committed"
+      |
+      v
+3. etcd applies it to bbolt
+      |
+      v
+You: GET name  ->  read from bbolt  ->  "Ravi"
+
+
+## So bbolt is the final resting place of data. Raft decides what is true; bbolt stores the result.
+
+One interesting design: etcd keeps old versions
+
+etcd doesn’t overwrite values. Each change gets a new revision number (a global counter that goes up with every write).
+
+revision 10:  name = Ravi
+revision 11:  name = Ramesh     (old value is kept, not erased)
+
+Why? Two features depend on it:
+
+Watch: “tell me whenever this key changes” (Kubernetes controllers rely on this).
+History reads: “what was the value at revision 10?”
+
+The catch: the file keeps growing
+
+Since old versions are kept, the bbolt file grows over time. You clean it up with two commands:
+
+Compaction: deletes old versions you no longer need (frees space inside the file).
+Defrag: shrinks the actual file on disk.
+bash
+etcdctl compact <revision>
+etcdctl defrag
+
+Size limit
+
+etcd limits the bbolt file to 2 GB by default. If it gets full, etcd stops accepting writes (a “NOSPACE” alarm) until you compact and defrag. This is a common real-world production issue, so it’s worth remembering.
+
+ls <data-dir>/member/snap/db        # this file IS the bbolt database
+etcdctl endpoint status -w table    # shows its size
+
+- bbolt = etcd’s on-disk database (one file, runs inside etcd).
+- WAL = history of changes; bbolt = current data.
+- Committed Raft entries are applied into bbolt.
+- etcd keeps old versions (revisions), which powers watches.
+- Old versions pile up, so you need compaction + defrag, or you hit the 2 GB limit.
+
+
+When are committed entries applied to bbolt?
+
+1. Leader appends entry to log
+2. Majority fsync it to their WAL and ACK
+3. Leader marks it COMMITTED (commit index advances)
+        |
+        v
+4. APPLY step: etcd executes the entry against its store
+   (in-memory index updated + write put into bbolt's open transaction)
+        |
+        v
+5. Client gets the response (after apply, for the leader)
+        |
+        v
+6. bbolt transaction COMMITS to disk (batched, roughly every 100 ms
+   or 10,000 operations)
+
+Commit vs apply are different things. Raft tracks two indexes:
+
+commit index: highest entry known to be safely stored on a majority
+applied index: highest entry actually executed against bbolt
+
+
+
+- Followers do not read from the leader’s WAL. The leader sends entries over the network (gRPC) as Raft AppendEntries messages.
+
+- Each node has its own WAL. A follower writes the received entries into its local WAL and fsyncs before replying.
+ACK comes only after fsync. This keeps Raft safe: a follower never confirms something it could forget after a crash.
+
+- Commit needs a majority. Once the leader has ACKs from a quorum (including itself), the entry is committed.
+
+- Followers learn the commit index from the leader’s next message (heartbeat or AppendEntries).
+
+- Then entries are applied to bbolt. Committed entries move from the log into the actual key-value store (member/snap/db).
+WAL’s job is crash recovery. On restart, a node loads the latest snapshot and replays WAL entries after it.
+Snapshots keep the WAL small. Periodic snapshots allow old WAL segments to be cleaned up.
+Far-behind followers get a snapshot. If the leader has already compacted the needed entries, it sends a full snapshot instead of log entries, then normal replication resumes.
+
+
+)):EXAMPLE :: :: :: ::
+
+kubectl scale deployment web --replicas=5
+   |
+API server --> etcd leader: PUT /registry/deployments/default/web
+   |
+Leader: append to WAL + fsync   (in parallel with sending to followers)
+   |
+Followers: append to WAL + fsync, then ACK
+   |
+Majority ACKed -> COMMITTED
+   |
+Leader: apply to bbolt (open txn + in-memory index)
+   |
+Leader --> API server: success
+   |
+Followers learn commit index, apply to their own bbolt
+
+After this, the Kubernetes side begins. Writing the new replica count to etcd doesn’t create pods by itself:
+
+The Deployment/ReplicaSet controller is watching etcd (through the API server) for changes.
+It sees replicas=5 (the watch is powered by etcd’s revisions).
+It creates new Pod objects, each of which is another write through the same Raft flow.
+The scheduler and kubelets then pick those up and run them.
+
 
 
 
