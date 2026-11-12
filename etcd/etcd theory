@@ -139,4 +139,190 @@ The most important components to understand are:
 
 ):Raft consensus algorithm
 
+)):The problem Raft solves
+
+etcd stores critical data (Kubernetes uses it to hold the entire cluster state).
+To avoid a single point of failure, etcd runs as a cluster of 3 or 5 nodes.
+But then a hard question appears: if all nodes hold copies of the data,how do they agree on what the data is, even when nodes crash or the network breaks?
+
+Raft is the algorithm that answers this. It makes a group of nodes behave like one reliable machine.
+
+1. Roles. Every node is in one of three states:
+
+Leader: only node that accepts writes. only one per term.
+Follower: passively copies what the leader sends.
+Candidate: a follower that has lost contact with the leader and is trying to become the new Leader.
+
+2. Term. A logical clock number. Every election starts a new term (term 1, 2, 3...). A node seeing a higher term than its own immediately steps down to follower. This is how stale leaders get discarded.
+
+Think of it like an election in a country.
+- Term 1: First election.
+- Term 2: Second election.
+- Term 3: Third election.
+Every time a new leader election begins, Raft moves to a higher term.
+
+A node that discovers a higher term must immediately step down and become a follower.
+
+This prevents an old leader from continuing to act as leader when a newer election has happened.
+
+3. Let's take a real-world etcd cluster
+Suppose you have three etcd nodes:
+Your etcd cluster
+etcd-1         etcd-2           etcd-3
+Leader         Follower         Follower
+Term 1         Term 1           Term 1
+
+
+Initially:
+- etcd-1 is the leader.
+- etcd-2 is a follower.
+- etcd-3 is a follower.
+- All three are operating in Term 1.
+The leader handles client write requests and replicates changes to followers.
+
+)):What happens when the leader crashes?
+Imagine etcd-1 suddenly crashes.
+
+etcd-1                   etcd-2                           etcd-3
+Leader                   Follower                         Follower
+Term 1                   Term 1                           Term 1
+crashed
+becomes old leader       becomes candidate and Term2
+
+Here's what happens step by step:
+1. etcd-2 and etcd-3 stop receiving heartbeats from etcd-1.
+2. Their election timeout expires.
+3. etcd-2 decides to start an election.
+4. etcd-2 increments its term from 1 to 2.
+5. It becomes a candidate and requests votes from other nodes.
+For example, etcd-2 sends a RequestVote message to etcd-3
+
+It essentially says:
+
+"Hey, I am starting an election for Term 2. Please vote for me."
+
+etcd-3 checks the request and, assuming the voting conditions are satisfied, votes for etcd-2.
+
+Now etcd-2 has two votes (including its own).
+
+- Since a three-node cluster needs a majority of two votes, etcd-2 becomes the leader
+
+
+etcd-1         etcd-2           etcd-3
+ Down          Leader           Follower
+               Term 2           Term 2
+
+Now etcd-2 is the new leader in Term 2.
+
+4. The most important scenario: What if the old leader comes back?
+This is where the Term concept becomes very important.
+
+Imagine etcd-1 was not actually crashed. It was temporarily disconnected from the other two nodes because of a network problem.
+
+This is called a network partition.
+
+During that time:
+- etcd-1 still thinks it is the leader in Term 1.
+- etcd-2 becomes the leader in Term 2.
+- etcd-3 follows etcd-2 in Term 2.
+Now the network connection comes back.
+
+etcd-1 starts communicating with etcd-2.
+etcd-2 sends a message containing Term 2.
+
+etcd-1 compares:
+My current term:       1
+Received term:         2
+Received term > My term
+
+)):What does etcd-1 do?
+1. Recognizes that Term 2 is newer.
+2. Updates its current term to 2.
+3. Immediately steps down from leader to follower.
+4. Accepts etcd-2 as the current leader, subject to normal Raft message handling.
+After network recovery
+
+etcd-1        etcd-2           etcd-3
+Follower      Leader           Follower
+Term 2        Term 2           Term 2
+
+One recognized leader
+
+This is exactly why Raft uses terms.
+
+Without terms, the old leader might continue behaving as a leader, creating conflicting leadership.
+
+Concept	          Meaning
+Term	          Which election generation the cluster is in
+Leader	          Which node currently handles Raft leadership
+Raft Index	      Position of a log entry in the Raft log
+
+Term:       5
+Leader:     etcd-2
+Raft Index: 1500
+
+This means:
+- The cluster is in its fifth election term.
+- etcd-2 is the current leader.
+- The Raft log has progressed to index 1500.
+
+):- Every new election increments the term.
+- A candidate increments its term before requesting votes.
+- A node receiving a higher-term message immediately becomes a follower.
+- Terms prevent stale leaders from continuing to act as leaders.
+- A majority (quorum) is required to elect a leader.
+
+}}:Replicated log. Every write is an entry in an ordered log. Raft guarantees all nodes end up with the same log in the same order.
+
+}}:Quorum (majority). In a 3-node cluster, majority = 2. In 5 nodes, majority = 3. Nothing is committed and no leader is elected without a majority. This is what prevents two groups from independently making conflicting decisions.
+
+{{:Leader election
+Each follower has a randomized election timeout (in etcd, roughly 1000 ms by default).
+The leader sends periodic heartbeats (default 100 ms) to reset those timers.
+If a follower stops hearing heartbeats, it becomes a candidate, increments the term, votes for itself, and asks others for votes.
+A node grants one vote per term, and only if the candidate’s log is at least as up to date as its own.
+First candidate to get a majority becomes leader.
+
+Randomized timeouts make it unlikely that two nodes start elections at the same moment.
+
+{{:Step 1: Normal write. You run kubectl scale deployment web --replicas=5. The API server writes to etcd:
+
+Client -> etcd-1 (leader): PUT /registry/deployments/web  replicas=5
+etcd-1: append to log at index 101
+etcd-1 -> etcd-2, etcd-3: AppendEntries(index 101)
+etcd-2: written, ACK
+etcd-1: now has 2 of 3 (itself + etcd-2) = majority -> COMMITTED
+etcd-1 -> Client: success
+etcd-3: slow, but catches up shortly
+
+Notice the leader didn’t wait for etcd-3. A majority was enough.
+
+- Writes are slower than reads from a single DB because each commit needs a majority to fsync to disk. Fast SSDs matter a lot for etcd.
+- Lose the majority and etcd becomes read-only/unavailable for writes. In a 3-node cluster, if 2 nodes die, Kubernetes can’t change state (running pods keep running, but you can’t schedule or scale).
+- Reads are linearizable by default, meaning etcd confirms with the quorum that the leader is still the leader before answering.
+
+etcdctl endpoint status --cluster -w table   # shows leader, term, raft index
+etcdctl member list
+
+Raft elects a single leader, the leader orders all writes in a log, and a write counts as committed only when a majority of nodes have stored it, so any committed data survives crashes and partitions.
+
+Step 1: Leader election
+Step 2: A write request arrives
+Step 3: Leader replicates the data
+Step 4: Quorum acknowledgement
+
+)):: ::What is quorum?
+Quorum means a majority of etcd members must acknowledge the write.
+
+Quorum = N/2 + 1
+
+The leader itself counts as one member. A write does not require all followers to acknowledge.
+
+)):WAL – Write-Ahead Log
+WAL stands for Write-Ahead Log.
+
+
+
+
+
 
