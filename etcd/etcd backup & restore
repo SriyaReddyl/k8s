@@ -1,0 +1,160 @@
+etcd Backup and Restore
+
+What a snapshot is
+
+etcdctl snapshot save asks a running etcd member to write a point-in-time copy of its bbolt database (the member/snap/db file from your notes) to a single file. It is consistent, so you can take it while the cluster is live.
+
+What is and isn’t in a backup
+
+Backed up
+All Kubernetes objects (Deployments, Secrets, ConfigMaps, RBAC, etc.)
+Cluster state
+
+Not backed up
+Contents of PersistentVolumes (your app data)
+Certificates in /etc/kubernetes/pki (back these up separately)
+Static pod manifests in /etc/kubernetes/manifests
+
+## So restoring etcd brings back the definitions of things, not the data inside your volumes.
+
+What restore actually does
+
+Restore does not touch the running etcd. 
+It takes the snapshot file and builds a brand-new data directory from it. 
+Then you point etcd at that new directory. 
+Restore also creates a new cluster identity (new cluster ID and member ID), 
+so the restored data can’t accidentally rejoin an old cluster.
+
+snapshot save  ->  (disaster)  ->  snapshot restore --data-dir /var/lib/etcd-restore
+   ->  edit /etc/kubernetes/manifests/etcd.yaml (hostPath -> new dir)
+   ->  kubelet notices the manifest change and recreates the etcd static pod
+   ->  API server reconnects
+# Anything created after the snapshot is lost after restore. You are going back in time.
+
+ ----------------------------------------------------------------------------------------
+
+Clear the Bash command cache : hash -r
+
+
+etcdctl and etcdutl are two different tools used to manage and maintain the etcd database in Kubernetes.
+Both interact with etcd in different ways.
+
+)):etcdctl stands for etcd Control.
+It is a command-line client used to communicate with a running etcd server.
+Think of etcd as a database and etcdctl as a database client, similar to:
+- mysql for MySQL.
+- psql for PostgreSQL.
+- mongosh for MongoDB.
+
+You use etcdctl to read, write, delete and inspect data stored in etcd.
+
+# Important etcdctl commands
+Check cluster health
+- etcdctl endpoint health
+Check cluster members
+- etcdctl member list -w table
+Check cluster status
+- etcdctl endpoint status -w table
+Read data
+- etcdctl get / --prefix --keys-only
+Write data
+- etcdctl put myname Sriya
+Read the data
+- etcdctl get myname
+Delete data
+- etcdctl del myname
+
+#Also saves the snapshots
+
+# These last three are examples using a standalone test key. Avoid experimenting with arbitrary keys in your production Kubernetes etcd database.
+
+)): What is etcdutl?
+etcdutl stands for etcd Utility.
+
+It is primarily used for offline etcd maintenance operations, especially snapshot inspection and restoration.
+
+etcdctl = Communicate with a running database.
+etcdutl = Perform maintenance operations on etcd data and snapshots.
+
+# Important etcdutl commands
+Check snapshot status
+- etcdutl snapshot status snapshot.db -w table
+Restore a snapshot
+- etcdutl snapshot restore snapshot.db \
+  --data-dir=/var/lib/etcd-restore
+
+))) :: :: :: Practical on your 1-control-plane cluster
+
+Check tooling
+etcdctl version
+etcdutl version
+
+- Step 1: Find the connection details
+root@quixydevops:/home/devopsprod# grep -E "listen-client-urls|cert-file|key-file|trusted-ca-file|data-dir" \
+  /etc/kubernetes/manifests/etcd.yaml
+    - --cert-file=/etc/kubernetes/pki/etcd/server.crt
+    - --data-dir=/var/lib/etcd
+    - --key-file=/etc/kubernetes/pki/etcd/server.key
+    - --listen-client-urls=https://127.0.0.1:2379,https://172.162.12.2:2379
+    - --peer-cert-file=/etc/kubernetes/pki/etcd/peer.crt
+    - --peer-key-file=/etc/kubernetes/pki/etcd/peer.key
+    - --peer-trusted-ca-file=/etc/kubernetes/pki/etcd/ca.crt
+    - --trusted-ca-file=/etc/kubernetes/pki/etcd/ca.crt
+
+- Save typing with environment variables:
+
+export ETCDCTL_API=3
+export ETCDCTL_ENDPOINTS=https://127.0.0.1:2379
+export ETCDCTL_CACERT=/etc/kubernetes/pki/etcd/ca.crt
+export ETCDCTL_CERT=/etc/kubernetes/pki/etcd/server.crt
+export ETCDCTL_KEY=/etc/kubernetes/pki/etcd/server.key
+
+why do weed to save the connection details ?
+
+We save the connection details because etcdctl needs to know which etcd server to connect to and how to authenticate with it.
+
+we need five environment variables
+
+:: :: Imagine your Kubernetes API server wants to communicate with etcd.
+1. client connects to server
+2. server presents TLS certificate
+3. client verifies servers TLS cert
+4. client presents TLS certificate
+5. server verifies client TLS cert
+6. server grants access to client
+7. both exchange info over encrypted TLS connection
+
+When you execute :
+etcdctl endpoint health
+
+1. etcdctl connects to 172.0.0.1:2379
+2. it verifies etcd server certificate using ca.crt
+3. it presents its client cert(server.crt)
+4. it uses private key (server.key) to prove its identity
+5. if auth succeeds, etcd process the request
+
+## if we don't configure those 5 environment variables
+root@quixydevops:/home/devopsprod# etcdctl endpoint health
+{"level":"warn","ts":"2026-11-13T16:09:56.016655+0530","logger":"client","caller":"v3@v3.5.24/retry_interceptor.go:63","msg":"retrying of unary invoker failed","target":"etcd-endpoints://0xc000484b40/127.0.0.1:2379","attempt":0,"error":"rpc error: code = DeadlineExceeded desc = latest balancer error: connection error: desc = \"error reading server preface: read tcp 127.0.0.1:49888->127.0.0.1:2379: read: connection reset by peer\""}
+127.0.0.1:2379 is unhealthy: failed to commit proposal: context deadline exceeded
+Error: unhealthy cluster
+
+### if we set
+root@quixydevops:/home/devopsprod# etcdctl endpoint health
+https://127.0.0.1:2379 is healthy: successfully committed proposal: took = 10.829142ms
+root@quixydevops:/home/devopsprod#
+
+## Do we need to export these every time?
+Export manually
+Pass everything in every command
+Save exports in your shell profile
+
+Endpoint: Where is etcd?
+TLS certificates: Am I allowed to connect, and can I trust the server?
+ETCDCTL_API: Which API interface should the client use?
+
+
+
+
+
+
