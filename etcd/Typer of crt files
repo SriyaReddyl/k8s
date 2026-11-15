@@ -1,0 +1,86 @@
+TLS certificate files in Kubernetes etcd
+
+etcd uses mutual TLS (mTLS): both sides present a certificate and both verify the other. In a kubeadm cluster, everything lives under /etc/kubernetes/pki/etcd/ (plus one file in /etc/kubernetes/pki/).
+
+Certificate files in a TLS handshake
+
+When your computer talks to a server, two questions come up:
+
+- Am I really talking to the right server? (not an imposter)
+- How do we keep our conversation secret?
+
+Certificates answer question 1. Encryption answers question 2.
+
+## An analogy: government ID
+Think of a passport:
+
+A passport proves who you are → this is a certificate
+The government that issued it is trusted by everyone → this is the CA (Certificate Authority)
+Your signature, which only you can produce → this is the private key
+
+## A border officer doesn’t know you personally. They trust the government that issued your passport, and they check your signature matches. TLS works the same way.
+
+
+1. Private key (.key): your secret
+Like your personal signature or the key to your house
+Never share it
+Used to prove you are who you claim to be
+
+2. Certificate (.crt): your public ID card
+Contains: your name/hostname, your public key, expiry date, and the CA’s signature
+Safe to share with anyone
+It’s tied to your private key (they are a matching pair)
+
+3. CA certificate (ca.crt): the trusted authority
+The “government” whose signature people trust
+Used to check whether someone else’s certificate is genuine
+Also safe to share
+
+(The CA also has its own ca.key which it uses to sign certificates. Keep that very safe.)
+
+.key	    Your signature (only you can make it)
+.crt	    Your ID card
+ca.crt	    The list of IDs the government approves
+
+
+)):A tiny story:((
+
+You walk up to a bank counter (the server).
+
+The bank shows you its ID card (server.crt).
+You check: “Was this ID issued by someone I trust?” You compare it with your ca.crt.
+If yes, you trust the bank and start talking.
+
+The bank also has a signature (server.key) that it never shows anyone. It uses it to prove the ID card really belongs to it.
+
+Who needs what
+
+- Normal website (one-way):
+Server has: .crt + .key
+You have: ca.crt
+
+- Kubernetes (two-way, both show ID):
+Server has: .crt + .key + ca.crt
+Client has: .crt + .key + ca.crt
+
+((:: ::((
+.key = secret. .crt = ID card. ca.crt = how I check other people’s ID cards.
+
+----------------------------------------------------------------
+1) client makes a request to server
+
+2) Server sends server.crt
+      ↓
+3) Client checks server.crt using ca.crt   ← "is the ID genuine?"
+      ↓
+   *** Server uses server.key to sign something ***   ← "is this ID really yours?"
+   Client verifies that signature using the public key inside server.crt
+      ↓
+4) Client sends client.crt
+      ↓
+5) Server checks client.crt using ca.crt
+      ↓
+   *** Client uses client.key to sign something ***
+   Server verifies it using the public key inside client.crt
+
+

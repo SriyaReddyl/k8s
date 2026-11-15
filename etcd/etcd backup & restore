@@ -120,7 +120,7 @@ we need five environment variables
 2. server presents TLS certificate
 3. client verifies servers TLS cert
 4. client presents TLS certificate
-5. server verifies client TLS cert
+5. server verifies client TLS cert (with ca.crt)
 6. server grants access to client
 7. both exchange info over encrypted TLS connection
 
@@ -154,7 +154,94 @@ TLS certificates: Am I allowed to connect, and can I trust the server?
 ETCDCTL_API: Which API interface should the client use?
 
 
+# step 2. 
+check etcd endpoint health, the above exported connections help to connect to etcd
+
+# step 3. 
+Create a backup directory
+Let's store backups separately from the etcd data directory.
+mkdir -p /var/backups/etcd
+chmod 700 /var/backups/etcd
+
+Your actual etcd database is stored at:
+/var/lib/etcd
+We don't want to store backups inside the live database directory.
+
+# step4.
+Take a snapshot
+etcdctl snapshot save /var/backups/etcd/etcd-backup.db
+
+1. etcdctl connects to the running etcd server.
+2. It sends a snapshot request.
+3. The etcd server generates a consistent snapshot of its database.
+4. The snapshot is transferred to your machine.
+5. etcdctl saves it as etcd-backup.db.
+Important: This is not simply copying /var/lib/etcd/member/snap/db while etcd is running. The snapshot API provides a consistent backup.
+
+# step5.
+Verify the snapshot
+Now use etcdutl.
+etcdutl snapshot status /var/backups/etcd/etcd-backup.db -w table
+
+# step6.
+Understand what we have backed up
+Suppose your Kubernetes cluster currently has:
+
+Kubernetes cluster state
+Deployments
+Secrets
+ConfigMaps
+RBAC and ServiceAccounts
+
+External data
+PersistentVolume application data
+TLS certificates and private keys
+Static Pod manifests
+
+The snapshot backs up the Kubernetes state stored in etcd, not the actual application files inside PersistentVolumes.
+
+You must back up those external resources separately.
+
+Also, remember that Kubernetes Secrets are included in the snapshot. Protect the backup like sensitive production data.
+
+# step7.
+What happens during disaster recovery?
+
+You take a snapshot at revision 100.
+Someone creates a Deployment at revision 110.
+Your etcd database gets corrupted.
+You restore the snapshot from revision 100.
+
+The Deployment created at revision 110 won't exist in the restored etcd state.
+
+You have effectively travelled back to revision 100.
+This is why regular backups matter.
 
 
+
+)):: ::)) let's perform your experiment
+
+# step1.
+Create a deployment AFTER the snapshot
+kubectl create deployment nginx --image=nginx
+kubectl get deployments
+
+# step2.
+Important: Before restoring
+
+Restoring the first snapshot will roll back the entire Kubernetes control-plane state, not just the test Deployment.
+
+Your single-control-plane cluster will experience downtime while etcd and the API server are recovered.
+
+Other resources created after the original snapshot can also disappear.
+
+We must carefully:
+1. Back up the current etcd manifest.
+2. Verify both snapshots.
+3. Stop the API server and etcd in the correct order.
+4. Restore into a separate data directory.
+5. Update the etcd static Pod's hostPath.
+6. Start etcd and verify its health.
+7. Restart the API server and check the Deployment.
 
 
