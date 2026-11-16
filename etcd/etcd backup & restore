@@ -262,4 +262,53 @@ Actual application data: Stored on disks, NFS, cloud volumes, or other storage b
 
 kubectl get pv -o wide
 
+etcd is the cluster’s database. It stores the definitions of every object, including PV and PVC objects, but not the actual data on your disks. When you restore a snapshot, the cluster’s state rolls back to the moment the snapshot was taken, while the real storage (EBS volumes, NFS shares, Ceph, etc.) stays exactly as it is now
 
+What can go wrong after a restore
+
+PVCs created after the snapshot disappear. The pod’s data is still on the underlying disk, but Kubernetes no longer has an object pointing to it.
+
+PVs deleted after the snapshot reappear. They may reference volumes that no longer exist in your cloud or storage backend.
+Binding state can be stale. A PV might show as bound to a PVC that no longer exists, or the reverse.
+
+Reclaim policy matters. If a PV had Delete policy and a PVC was deleted after the snapshot, the real disk may already be gone, so the restored PV points to nothing.
+
+Also note the underlying volume IDs and set the reclaim policy to Retain on important PVs, so storage isn’t deleted while you’re mid-recovery
+
+
+# step5.
+Restore the snapshot
+
+create a directory (ls -ld /var/lib/etcd-restore)
+here we first need to restore out backup
+
+/usr/local/bin/etcdutl snapshot restore \
+  /var/backups/etcd/etcd-backup.db \
+  --name=quixydevops \
+  --initial-cluster=quixydevops=https://172.162.12.2:2380 \
+  --initial-advertise-peer-urls=https://172.162.12.2:2380 \
+  --initial-cluster-token=etcd-cluster \
+  --data-dir=/var/lib/etcd-restore \
+  --bump-revision=1000000000 \
+  --mark-compacted
+
+
+root@quixydevops:/var/lib/etcd-restore# ls
+member
+root@quixydevops:/var/lib/etcd-restore# cd member/
+root@quixydevops:/var/lib/etcd-restore/member# ls
+snap  wal
+
+- snap/ — etcd snapshot and database state.
+- wal/ — write-ahead log files used for recovery and replay.
+Important: This confirms the directory structure, but we still need to verify that the live etcd data directory has not been switched yet.
+
+((:: create a copy of the original etcd.yaml manifest
+((:: change host path in etcd.yaml to the snapshot restored path
+- hostPath:
+      path: /var/lib/etcd
+to
+- hostPath:
+      path: /var/lib/etcd-restore
+
+((:: 
