@@ -244,4 +244,22 @@ We must carefully:
 6. Start etcd and verify its health.
 7. Restart the API server and check the Deployment.
 
+# step3.
+Backup the cluster manifests for safty
+mkdir -p /root/etcd-restore-backup
+
+cp -a /etc/kubernetes/manifests/etcd.yaml \
+  /root/etcd-restore-backup/etcd.yaml
+
+# step4.
+Prepare for the restore
+
+Before restoring etcd on your live cluster, we should absolutely check PersistentVolumes (PVs) and PersistentVolumeClaims (PVCs).
+
+PV/PVC definitions: Stored in etcd, so they are included in the snapshot.
+
+Actual application data: Stored on disks, NFS, cloud volumes, or other storage backends. The etcd snapshot does not back up this data.
+
+kubectl get pv -o wide
+
 
