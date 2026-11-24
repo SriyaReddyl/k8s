@@ -1,0 +1,7 @@
+Raft keeps every node in a cluster identical by having them all hold the same ordered log of changes. Each log entry has an index (its position), a term (which leader created it) and the data (the command).
+
+# Two stages for every entry:
+Committed: saved on a majority of nodes (2 of 3). Now it can't be lost.
+Applied: actually executed, so the change takes effect.
+
+Example: A write arrives and sits in memory (unstable). The library hands it to you to save to disk. Once a majority of nodes have saved it, it becomes committed. The library then hands it to you again to apply, and you call Advance(). Now it's applied.

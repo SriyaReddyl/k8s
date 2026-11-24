@@ -280,7 +280,7 @@ Also note the underlying volume IDs and set the reclaim policy to Retain on impo
 Restore the snapshot
 
 create a directory (ls -ld /var/lib/etcd-restore)
-here we first need to restore out backup
+here we first need to restore our backedup snapshot
 
 /usr/local/bin/etcdutl snapshot restore \
   /var/backups/etcd/etcd-backup.db \
@@ -303,6 +303,14 @@ snap  wal
 - wal/ — write-ahead log files used for recovery and replay.
 Important: This confirms the directory structure, but we still need to verify that the live etcd data directory has not been switched yet.
 
+It confirms that etcdutl created the restored etcd member data structure.
+
+But it does not mean the running etcd process is using this restored data yet.
+
+# step6.
+Prepare the etcd static Pod manifest
+Now we need to tell etcd to use the restored data directory.
+
 ((:: create a copy of the original etcd.yaml manifest
 ((:: change host path in etcd.yaml to the snapshot restored path
 - hostPath:
@@ -310,5 +318,100 @@ Important: This confirms the directory structure, but we still need to verify th
 to
 - hostPath:
       path: /var/lib/etcd-restore
+Host: /var/lib/etcd-restore contains your restored snapshot.
 
-((:: 
+((:: Why are we changing only hostPath.path?
+
+Because etcd expects its data directory inside the container to remain /var/lib/etcd.
+We are only changing which host directory gets mounted there.
+
+HOST
+/var/lib/etcd
+
+CONTAINER
+/var/lib/etcd
+
+After restore
+
+HOST
+/var/lib/etcd-restore
+
+CONTAINER
+/var/lib/etcd
+
+The container's data directory stays the same. Only the host directory mounted into it changes.
+
+# At this point, we have prepared the new manifest, but we have not switched the running etcd data directory yet.
+
+# Step7.
+Stop the control-plane static Pods
+
+Before switching the etcd data directory, we must stop the components that depend on etcd.
+
+These are:
+1. kube-apiserver
+2. kube-controller-manager
+3. kube-scheduler
+4. etcd
+
+Why stop the API server?
+
+Because the API server communicates with etcd to read and write Kubernetes objects. We don't want it accessing etcd while we are switching its underlying database.
+
+# Create a directory to preserve the manifests
+mkdir -p /root/etcd-restore-backup/paused-manifests
+
+# Move the API server manifest, controller manager manifest, scheduler manifest, etcd manifest
+
+mv /etc/kubernetes/manifests/kube-apiserver.yaml \
+   /root/etcd-restore-backup/paused-manifests/
+
+mv /etc/kubernetes/manifests/kube-controller-manager.yaml \
+   /root/etcd-restore-backup/paused-manifests/
+
+mv /etc/kubernetes/manifests/kube-scheduler.yaml \
+   /root/etcd-restore-backup/paused-manifests/
+
+mv /etc/kubernetes/manifests/etcd.yaml \
+   /root/etcd-restore-backup/paused-manifests/
+
+# Moving the manifests outside /etc/kubernetes/manifests/ tells the kubelet to stop managing those Pods. As these are static pods we need to delete manifest files fromthat path, then kubelet cant able to manage those
+
+ls -l /etc/kubernetes/manifests/
+directory needs to be empty
+
+# check all services/pods
+
+crictl ps | grep etcd
+crictl ps | grep kube-apiserver
+ They should not runnn...
+
+# step8.
+Switch from original etcd data to restored data
+
+Preserve the original etcd directory
+mv /var/lib/etcd /var/lib/etcd-pre-restore
+
+Install the modified etcd manifest
+cp /tmp/etcd-restore.yaml /etc/kubernetes/manifests/etcd.yaml
+
+Now the kubelet sees the etcd manifest and starts the etcd static Pod.
+
+# Now check etcd status and endpoint health
+
+# If everything is working, move back the api server, scheduler and controller manifests back to /etc/kubernetes/manifests/
+
+# And check all conponents status
+
+
+# /var/lib/etcd
+I mean this directory doesnt exists right then why and how we are using it in etcd.yaml file
+
+The confusion is because Linux host directories and container directories are two different filesystems.
+
+You are correct: /var/lib/etcd does not exist on your Kubernetes host right now.
+
+But it exists inside the etcd container because containerd mounts another directory there.
+
+
+

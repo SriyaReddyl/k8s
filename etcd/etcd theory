@@ -31,6 +31,8 @@ The API server is the component that reads and writes Kubernetes objects to etcd
 
 **etcd stores the desired state, while Kubernetes controllers work to make the actual state match the desired state.**
 
+etcd stores both the current and desired state of the cluster.
+
 ):How is etcd deployed in Kubernetes?
 There are two common ways.
 1. Stacked etcd
@@ -145,6 +147,8 @@ etcd stores critical data (Kubernetes uses it to hold the entire cluster state).
 To avoid a single point of failure, etcd runs as a cluster of 3 or 5 nodes.
 But then a hard question appears: if all nodes hold copies of the data,how do they agree on what the data is, even when nodes crash or the network breaks?
 
+Raft is a way for multiple servers to agree on the same data and the same order of changes, even if some servers fail. One node is elected leader, it copies every change to the others, and a change only counts once a majority has it.
+
 Raft is the algorithm that answers this. It makes a group of nodes behave like one reliable machine.
 
 1. Roles. Every node is in one of three states:
@@ -153,7 +157,7 @@ Leader: only node that accepts writes. only one per term.
 Follower: passively copies what the leader sends.
 Candidate: a follower that has lost contact with the leader and is trying to become the new Leader.
 
-2. Term. A logical clock number. Every election starts a new term (term 1, 2, 3...). A node seeing a higher term than its own immediately steps down to follower. This is how stale leaders get discarded.
+2. Term. A logical clock number. Every election starts a new term (term 1, 2, 3...). A node seeing a higher term than its own, immediately steps down to follower. This is how stale leaders get discarded.
 
 Think of it like an election in a country.
 - Term 1: First election.
@@ -187,7 +191,7 @@ etcd-1                   etcd-2                           etcd-3
 Leader                   Follower                         Follower
 Term 1                   Term 1                           Term 1
 crashed
-becomes old leader       becomes candidate and Term2
+becomes old leader       becomes candidate and start's Term2
 
 Here's what happens step by step:
 1. etcd-2 and etcd-3 stop receiving heartbeats from etcd-1.
@@ -253,9 +257,9 @@ This is exactly why Raft uses terms.
 Without terms, the old leader might continue behaving as a leader, creating conflicting leadership.
 
 Concept	          Meaning
-Term	          Which election generation the cluster is in
+Term	             Which election generation the cluster is in
 Leader	          Which node currently handles Raft leadership
-Raft Index	      Position of a log entry in the Raft log
+Raft Index	       Position of a log entry in the Raft log
 
 Term:       5
 Leader:     etcd-2
