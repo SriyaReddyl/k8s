@@ -289,6 +289,29 @@ First candidate to get a majority becomes leader.
 
 Randomized timeouts make it unlikely that two nodes start elections at the same moment.
 
+
+):: :: How the leader is elected :
+
+When a candidate starts an election, it sends a RequestVote RPC to every other node, containing:
+
+term: the candidate's new term
+candidateId: who is asking
+lastLogIndex: index of the candidate's last log entry
+lastLogTerm: term of the candidate's last log entry
+
+The voter compares these against the last entry in its own log.
+
+# The "up-to-date" rule
+
+If the last log terms differ, the log with the higher last term is more up to date.
+If the last log terms are the same, the longer log (higher last index) is more up to date.
+
+# The voter grants its vote only if both conditions hold:
+
+It hasn't already voted for someone else in this term (votedFor is empty or equals this candidate).
+The candidate's (lastLogTerm, lastLogIndex) is >= its own.
+
+
 {{:Step 1: Normal write. You run kubectl scale deployment web --replicas=5. The API server writes to etcd:
 
 Client -> etcd-1 (leader): PUT /registry/deployments/web  replicas=5
@@ -338,6 +361,8 @@ Whenever etcd receives a change, it records the change in its WAL before conside
 4. Once a quorum has replicated the entry, it is committed.
 5. The committed change is applied to the database state.
 
+The WAL is local to each member, so other members can't read etcd 1's WAL
+
 The WAL is a file on disk (<data-dir>/member/wal/*.wal). But when etcd writes to that file, the data doesn’t land on the physical disk immediately.
 
 ## The WAL file always exists on disk, but without fsync, its latest entries might exist only in RAM. If the machine crashed at that moment, those entries would vanish, even though the follower had already ACKed them.
@@ -349,6 +374,9 @@ write() puts data in the file, but only in OS memory at first.
 fsync() pushes it to the physical disk.
 etcd fsyncs before ACKing, so the entry survives crashes.
 
+etcd writes entry -> WAL file (in page cache) -> fsync -> physical disk -> ack
+
+# Commit" vs "write to bbolt": when the quorum is satisfied, the leader marks the entry as committed (just advancing the commit index). Then the apply step writes it into bbolt. These are two separate steps, though they happen back to back on the leader.
 
 fsync is a system call that tells the operating system: “Take the data I wrote to this file and physically save it to the disk right now. Don’t return until it’s done.”
 
